@@ -1,0 +1,50 @@
+[
+  {
+    "id": 1,
+    "customer": "Ana",
+    "status": "shipped",
+    "total": 120.5,
+    "items": [
+      { "sku": "A1", "qty": 2, "price": 30 },
+      { "sku": "B2", "qty": 1, "price": 60.5 }
+    ],
+    "createdAt": "2026-09-01T10:00:00Z"
+  },
+  {
+    "id": "2",
+    "customer": "Luis",
+    "status": "pending",
+    "total": "80",
+    "items": [
+      { "sku": "A1", "qty": "1", "price": 30 },
+      { "sku": "C3", "qty": 2, "price": 25 }
+    ],
+    "createdAt": "2026-09-02T14:30:00Z"
+  },
+  {
+    "id": 3,
+    "customer": null,
+    "status": "cancelled",
+    "total": 0,
+    "items": [],
+    "createdAt": "2026-09-03T09:00:00Z"
+  },
+  {
+    "id": 4,
+    "customer": "Ana",
+    "status": "SHIPPED",
+    "total": 45,
+    "items": [
+      { "sku": "A1", "qty": 1, "price": 30 },
+      { "sku": "C3", "qty": 1, "price": 15 }
+    ],
+    "createdAt": "not-a-date"
+  },
+  {
+    "id": 5,
+    "status": "refunded",
+    "total": 99,
+    "items": [{ "sku": "B2", "qty": 1, "price": 99 }],
+    "createdAt": "2026-09-05T11:00:00Z"
+  }
+]
