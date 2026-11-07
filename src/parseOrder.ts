@@ -1,122 +1,102 @@
-import { OrderItem, OrderStatus, ParseResult } from "./types";
-
-const STATUSES: readonly OrderStatus[] = [
-  "pending",
-  "shipped",
-  "cancelled",
-  "refunded",
-];
+import { isRecord } from "./guards";
+import { ORDER_STATUSES } from "./types";
+import type { OrderItem, ParseResult } from "./types";
 
 // Coerces finite numbers and numeric strings; everything else becomes NaN.
 
+const DECIMAL = /^-?\d+(\.\d+)?$/;
 function toNumber(v: unknown): number {
   if (typeof v === "number") return v;
-  if (typeof v === "string" && v.trim() !== "") return Number(v);
+  if (typeof v === "string" && DECIMAL.test(v.trim())) return Number(v);
   return NaN;
 }
 
+const reject = (reason: string): ParseResult => ({ kind: "rejected", reason });
+
 export function parseOrder(raw: unknown): ParseResult {
   // Policy: a non-object can't be salvaged, so reject.
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return { kind: "rejected", reason: "record is not an object" };
-  }
-  const r = raw as Record<string, unknown>;
+  if (!isRecord(raw)) return reject("record is not an object");
 
-  // Policy: numeric strings like "42" are coerced, since upstream CSV exports stringify ids; "abc" or "" is rejected.
-  const id = toNumber(r.id);
+  // Policy: numeric strings like "2" are coerced, (legacy API stringify ids); "abc" or "" is rejected.
+  const id = toNumber(raw.id);
   if (!Number.isInteger(id) || id <= 0) {
-    return { kind: "rejected", reason: `invalid id: ${JSON.stringify(r.id)}` };
+    return reject(`invalid id: ${JSON.stringify(raw.id)}`);
   }
 
   // Policy: a MISSING customer key means a corrupt/incomplete record, so reject.
-  if (!("customer" in r) || r.customer === undefined) {
-    return { kind: "rejected", reason: "customer field is missing" };
+  if (!("customer" in raw) || raw.customer === undefined) {
+    return reject("customer field is missing");
   }
 
   // Policy: an explicit null customer is a legitimate guest checkout, so keep it as null.
   // Policy: a non-string, non-null customer (e.g. 123) is ambiguous, so reject.
-  if (r.customer !== null && typeof r.customer !== "string") {
-    return {
-      kind: "rejected",
-      reason: `invalid customer: ${JSON.stringify(r.customer)}`,
-    };
+  const rawCustomer = raw.customer;
+  if (rawCustomer !== null && typeof rawCustomer !== "string") {
+    return reject(`invalid customer: ${JSON.stringify(rawCustomer)}`);
   }
 
-  // Policy: blank/whitespace customer strings are treated as no customer (null) after trimming.
-
+  // Policy: blank/whitespace customer strings are treated as no customer (null).
   const customer =
-    r.customer === null || r.customer.trim() === "" ? null : r.customer.trim();
+    rawCustomer === null || rawCustomer.trim() === ""
+      ? null
+      : rawCustomer.trim();
 
   // Policy: status casing/whitespace is normalized ("PAID " -> "paid"), it's harmless client variation.
-
   const statusNorm =
-    typeof r.status === "string" ? r.status.trim().toLowerCase() : r.status;
+    typeof raw.status === "string"
+      ? raw.status.trim().toLowerCase()
+      : raw.status;
 
   // Policy: an unknown status is rejected, not defaulted, since guessing could ship or refund the wrong order.
-
-  const status = STATUSES.find((s) => s === statusNorm);
-  if (!status) {
-    return {
-      kind: "rejected",
-      reason: `unknown status: ${JSON.stringify(r.status)}`,
-    };
+  const status = ORDER_STATUSES.find((s) => s === statusNorm);
+  if (status === undefined) {
+    return reject(`unknown status: ${JSON.stringify(raw.status)}`);
   }
 
   // Policy: numeric-string totals ("19.99") are coerced; NaN, Infinity, and negatives are rejected as untrustworthy money values.
-
-  const total = toNumber(r.total);
+  const total = toNumber(raw.total);
   if (!Number.isFinite(total) || total < 0) {
-    return {
-      kind: "rejected",
-      reason: `invalid total: ${JSON.stringify(r.total)}`,
-    };
+    return reject(`invalid total: ${JSON.stringify(raw.total)}`);
   }
 
   // Policy: items must be an array; a missing/non-array value is rejected rather than defaulted to [].
-
-  if (!Array.isArray(r.items)) {
-    return { kind: "rejected", reason: "items is not an array" };
-  }
+  const rawItems: unknown = raw.items;
+  if (!Array.isArray(rawItems)) return reject("items is not an array");
 
   const items: OrderItem[] = [];
-  for (const [i, it] of r.items.entries()) {
-    // Policy: one bad line item rejects the whole order, since silently dropping items would corrupt the order.
-    if (typeof it !== "object" || it === null) {
-      return { kind: "rejected", reason: `items[${i}] is not an object` };
+  // Policy: one bad line item rejects the whole order; silently dropping items would corrupt it.
+  for (const [i, it] of rawItems.entries()) {
+    if (!isRecord(it)) return reject(`items[${i}] is not an object`);
+
+    const sku = it.sku;
+    if (typeof sku !== "string" || sku.trim() === "") {
+      return reject(`items[${i}].sku invalid`);
     }
-    const item = it as Record<string, unknown>;
-    const qty = toNumber(item.qty);
-    const price = toNumber(item.price);
-    if (typeof item.sku !== "string" || item.sku.trim() === "") {
-      return { kind: "rejected", reason: `items[${i}].sku invalid` };
-    }
+
+    const qty = toNumber(it.qty);
     if (!Number.isInteger(qty) || qty <= 0) {
-      return {
-        kind: "rejected",
-        reason: `items[${i}].qty invalid: ${JSON.stringify(item.qty)}`,
-      };
+      return reject(`items[${i}].qty invalid: ${JSON.stringify(it.qty)}`);
     }
+
+    const price = toNumber(it.price);
     if (!Number.isFinite(price) || price < 0) {
-      return {
-        kind: "rejected",
-        reason: `items[${i}].price invalid: ${JSON.stringify(item.price)}`,
-      };
+      return reject(`items[${i}].price invalid: ${JSON.stringify(it.price)}`);
     }
-    items.push({ sku: item.sku.trim(), qty, price });
+
+    items.push({ sku: sku.trim(), qty, price });
   }
 
   // Policy: missing/null createdAt becomes null (the type allows it and "unknown time" is a valid state).
   // Policy: a PRESENT but unparseable date is rejected, since it signals corruption and silently nulling it would hide that.
 
   let createdAt: Date | null = null;
-  if (r.createdAt !== undefined && r.createdAt !== null) {
+  if (raw.createdAt !== undefined && raw.createdAt !== null) {
     const d =
-      typeof r.createdAt === "string" ? new Date(r.createdAt) : new Date(NaN);
+      typeof raw.createdAt === "string"
+        ? new Date(raw.createdAt)
+        : new Date(NaN);
     if (Number.isNaN(d.getTime())) {
-      return {
-        kind: "rejected",
-        reason: `bad createdAt: ${JSON.stringify(r.createdAt)}`,
-      };
+      return reject(`bad createdAt: ${JSON.stringify(raw.createdAt)}`);
     }
     createdAt = d;
   }

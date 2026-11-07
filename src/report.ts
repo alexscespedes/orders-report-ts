@@ -1,12 +1,12 @@
-import { count } from "node:console";
-import { Order, Report, Rejected, OrderStatus } from "./types";
+import {
+  type Order,
+  type Report,
+  type Rejected,
+  type OrderStatus,
+  ORDER_STATUSES,
+} from "./types";
 
-const STATUSES: readonly OrderStatus[] = [
-  "pending",
-  "shipped",
-  "cancelled",
-  "refunded",
-];
+const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 export function buildReport(
   orders: Order[],
@@ -14,25 +14,33 @@ export function buildReport(
   topN = 5,
 ): Report {
   // 1. Revenue per status: start with every status at 0 so the Record is total.
-  const revenueByStatus = orders.reduce<Record<OrderStatus, number>>(
+  const zero: Record<OrderStatus, number> = {
+    pending: 0,
+    shipped: 0,
+    cancelled: 0,
+    refunded: 0,
+  };
+  const revenue = orders.reduce(
     (acc, o) => ({ ...acc, [o.status]: acc[o.status] + o.total }),
-    STATUSES.reduce(
-      (acc, s) => ({ ...acc, [s]: 0 }),
-      {} as Record<OrderStatus, number>,
-    ),
+    zero,
   );
+
+  const revenueByStatus: Record<OrderStatus, number> = {
+    pending: round2(revenue.pending),
+    shipped: round2(revenue.shipped),
+    cancelled: round2(revenue.cancelled),
+    refunded: round2(revenue.refunded),
+  };
 
   // 2. Top SKUs by quantity: sum qty per SKU, then sort a copy and take N.
   const qtyBySku = orders
     .flatMap((o) => o.items)
-    .reduce<Record<string, number>>((acc, item) => {
-      const qty = Number(item.qty);
-      return Number.isFinite(qty)
-        ? { ...acc, [item.sku]: (acc[item.sku] ?? 0) + qty }
-        : acc;
-    }, {});
+    .reduce(
+      (acc, item) => acc.set(item.sku, (acc.get(item.sku) ?? 0) + item.qty),
+      new Map<string, number>(),
+    );
 
-  const topSkus = Object.entries(qtyBySku)
+  const topSkus = [...qtyBySku]
     .map(([sku, qty]) => ({ sku, qty }))
     .sort((a, b) => b.qty - a.qty || a.sku.localeCompare(b.sku))
     .slice(0, topN);
@@ -40,9 +48,10 @@ export function buildReport(
   // 3. Repeat customers: count orders per non-null customer, keep those with > 1.
   const orderByCustomer = orders
     .filter((o): o is Order & { customer: string } => o.customer !== null)
-    .reduce<
-      Record<string, number>
-    >((acc, o) => ({ ...acc, [o.customer]: (acc[o.customer] ?? 0) + 1 }), {});
+    .reduce(
+      (acc, o) => acc.set(o.customer, (acc.get(o.customer) ?? 0) + 1),
+      new Map<string, number>(),
+    );
 
   const repeatCustomers = Object.entries(orderByCustomer)
     .filter(([, count]) => count > 1)
@@ -51,12 +60,10 @@ export function buildReport(
       (a, b) => b.orders - a.orders || a.customer.localeCompare(b.customer),
     );
 
-  const rejectedList = rejected.map(({ reason, raw }) => ({ reason, raw }));
-
   return {
     revenueByStatus,
     topSkus,
     repeatCustomers,
-    rejected: rejectedList,
+    rejected: [...rejected],
   };
 }
